@@ -588,7 +588,7 @@ function redraw()
   local vals = {
     s.pitch .. " (" .. mu.note_num_to_name(s.pitch, true) .. ")",
     s.vel,
-    s.num.."/"..s.den,
+    s.num.."/\"..s.den,
     s.cc1_v,
     s.cc2_v,
     s.mod,
@@ -645,6 +645,7 @@ function redraw()
 end
 
 function cleanup()
+  clock.cancel_all()
   for i = 1, 4 do
     tracks[i].is_running = false
   end
@@ -653,5 +654,4 @@ function cleanup()
       m:cc(123, 0, ch)
     end
   end
-  clock.cancel_all()
 end
