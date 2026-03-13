@@ -12,25 +12,9 @@
 -- E2: Select Parameter
 -- E3: Adjust Parameter
 --
--- Parameter details:
---
--- DURATION: E2 toggles between
---     Numerator/Denominator.
---     E3 adjusts.
---
--- CC1/CC2: Assignable MIDI CC.
---     Select CC address and
---     value separately.
---
--- K1 + K3: GLOBAL START / STOP
---
--- K3 (Hold):
---     SAVE to selected SLOT.
---     Slots are handled
---     externally in PARAMS.
---
--- K3 (Tap): Randomize step
---     with funk flavor
+-- K1 + K3: Live groove capture (1 bar MIDI timing)
+-- Grid row 8: mute toggles (cols 1-4)
+-- Grid row 7: solo toggles (cols 1-4)
 
 local tab = require 'tabutil'
 local mu = require 'musicutil'
@@ -50,27 +34,18 @@ local hold_start = 0
 
 local param_names = {"PITCH", "VELOCITY", "DURATION", "CC1 VALUE", "CC2 VALUE", "MODULATION", "ARTICULATION", "GLIDE", "LOOP TO", "REPEATS", "PROBABILITY"}
 local m = midi.connect()
+local g = grid.connect()
 
 -- FUNK DEFAULTS per track role
--- pitch_lo/hi: randomize range, default_vel, default_artic
 local funk_defaults = {
-  -- BASS: low register, strong attack, tight articulation
   { pitch_lo = 28, pitch_hi = 52, vel = 110, artic = 0.70, den = 4 },
-  -- KEYS: mid register, moderate velocity, staccato stabs
   { pitch_lo = 55, pitch_hi = 79, vel = 90, artic = 0.40, den = 4 },
-  -- GUIT: mid register, tight 16th chops
   { pitch_lo = 48, pitch_hi = 72, vel = 85, artic = 0.35, den = 4 },
-  -- HORN: upper register, punchy stabs
   { pitch_lo = 60, pitch_hi = 84, vel = 100, artic = 0.50, den = 4 },
 }
 
 -- GROOVE TEMPLATES
--- Each template is a table of 16 steps: {pitch_offset, vel, num, den, artic, prob}
--- pitch_offset is relative to root (0 = root, 7 = fifth, etc.)
--- vel 0 = rest/ghost
-
 local groove_templates = {
-  -- 1: Parliament One — everything hits the ONE hard
   { name = "Parliament 1",
     steps = {
       {0,120,1,4,0.8,100}, {0,0,1,4,0.5,0},     {7,70,1,4,0.4,80},  {0,50,1,4,0.3,60},
@@ -79,7 +54,6 @@ local groove_templates = {
       {3,95,1,4,0.65,100}, {0,0,1,4,0.5,0},       {5,60,1,4,0.35,70}, {0,55,1,4,0.3,60},
     }
   },
-  -- 2: JB Tight — James Brown precision pocket
   { name = "JB Tight",
     steps = {
       {0,127,1,4,0.6,100}, {0,40,1,4,0.2,50},    {7,90,1,4,0.5,100}, {0,35,1,4,0.2,40},
@@ -88,7 +62,6 @@ local groove_templates = {
       {5,105,1,4,0.55,100},{0,50,1,4,0.25,55},    {3,80,1,4,0.4,85},  {7,60,1,4,0.3,70},
     }
   },
-  -- 3: Sly Syncopated — Sly Stone off-beat groove
   { name = "Sly Synco",
     steps = {
       {0,110,1,4,0.7,100}, {5,85,1,4,0.4,90},    {0,0,1,4,0.5,0},    {7,100,1,4,0.6,100},
@@ -97,7 +70,6 @@ local groove_templates = {
       {3,95,1,4,0.55,100}, {0,45,1,4,0.25,45},    {5,90,1,4,0.5,90},  {0,0,1,4,0.5,0},
     }
   },
-  -- 4: Bootsy Bass — deep pocket with octave pops
   { name = "Bootsy Bass",
     steps = {
       {0,120,1,4,0.75,100},{0,0,1,4,0.5,0},      {0,50,1,4,0.25,50}, {12,90,1,4,0.4,90},
@@ -106,7 +78,6 @@ local groove_templates = {
       {5,105,1,4,0.6,100}, {0,0,1,4,0.5,0},       {7,65,1,4,0.3,65},  {0,75,1,4,0.4,80},
     }
   },
-  -- 5: Meters Groove — The Meters second-line funk
   { name = "Meters",
     steps = {
       {0,115,1,4,0.65,100},{0,40,1,4,0.2,40},    {5,80,1,4,0.45,85}, {0,0,1,4,0.5,0},
@@ -115,7 +86,6 @@ local groove_templates = {
       {0,0,1,4,0.5,0},     {3,95,1,4,0.55,100},   {0,55,1,4,0.3,60},  {5,70,1,4,0.35,75},
     }
   },
-  -- 6: Stevie Wonder — clavinet-style 16th chop
   { name = "Stevie Clav",
     steps = {
       {0,100,1,4,0.3,100}, {3,75,1,4,0.25,80},   {5,90,1,4,0.3,95},  {0,50,1,4,0.2,50},
@@ -124,7 +94,6 @@ local groove_templates = {
       {5,100,1,4,0.3,100}, {0,65,1,4,0.2,65},    {7,80,1,4,0.25,85}, {3,50,1,4,0.2,50},
     }
   },
-  -- 7: Prince — minimal but locked
   { name = "Prince",
     steps = {
       {0,120,1,4,0.5,100}, {0,0,1,4,0.5,0},      {0,0,1,4,0.5,0},    {7,80,1,4,0.35,80},
@@ -133,7 +102,6 @@ local groove_templates = {
       {0,95,1,4,0.45,100}, {3,60,1,4,0.25,60},    {0,0,1,4,0.5,0},    {5,85,1,4,0.4,90},
     }
   },
-  -- 8: P-Funk Mothership — polyrhythmic cosmic groove
   { name = "Mothership",
     steps = {
       {0,125,1,4,0.8,100}, {7,60,1,4,0.3,60},    {3,80,1,4,0.5,85},  {5,55,1,4,0.25,55},
@@ -149,6 +117,15 @@ for i, g in ipairs(groove_templates) do
   groove_names[i] = g.name
 end
 table.insert(groove_names, 1, "---")
+
+-- Grid mute/solo state
+local track_mutes = { false, false, false, false }
+local track_solos = { false, false, false, false }
+
+-- Live groove capture
+local groove_capture = {}
+local capture_active = false
+local capture_times = {}
 
 -- 2. INITIALIZATION
 function init()
@@ -181,11 +158,9 @@ function init()
   params:add_option("rec_mode", "MIDI RECORD MODE", {"OFF", "ON"}, 1)
   params:add_option("midi_remote", "REMOTE MAPPING", {"OFF", "16n", "nKONTROL2"}, 2)
 
-  -- FUNK: Global Swing (50% = straight, 67% = triplet swing)
   params:add_control("swing", "SWING",
     controlspec.new(50, 75, 'lin', 1, 54, "%"))
 
-  -- FUNK: Groove template loader per track
   for i = 1, 4 do
     params:add_group("TRACK " .. track_names[i], 8)
     params:add_number("midi_ch_"..i, "MIDI CHANNEL", 1, 16, i)
@@ -198,7 +173,6 @@ function init()
     params:set_action("groove_"..i, function(v)
       if v > 1 then apply_groove_template(i, v - 1) end
     end)
-    -- FUNK: Ghost note threshold per track
     params:add_number("ghost_thresh_"..i, "GHOST THRESHOLD", 0, 80, 50)
 
     params:set_action("midi_ch_"..i, function(v) tracks[i].midi_ch = v end)
@@ -219,12 +193,10 @@ function init()
   end)
 
   params:add_separator("quantize_config", "QUANTIZATION")
-  -- FUNK: Default quantize ON, Mixolydian (the funk mode)
   params:add_option("quantize", "QUANTIZE", {"OFF", "ON"}, 2)
   params:add_option("root_note", "ROOT NOTE", mu.NOTE_NAMES, 1)
   local scale_names = {}
   for i=1, #mu.SCALES do table.insert(scale_names, mu.SCALES[i].name) end
-  -- Find Mixolydian index
   local mixo_idx = 1
   for i, s in ipairs(mu.SCALES) do
     if s.name == "Mixolydian" then mixo_idx = i; break end
@@ -236,6 +208,13 @@ function init()
     local remote = params:get("midi_remote")
     if msg.type == "note_on" and params:get("rec_mode") == 2 then record_midi_step(msg.note, msg.vel)
     elseif msg.type == "cc" and remote > 1 then handle_remote_cc(msg.cc, msg.val, remote) end
+    
+    -- Capture groove timing
+    if capture_active then
+      if msg.type == "note_on" and msg.vel > 0 then
+        table.insert(capture_times, util.time())
+      end
+    end
   end
 
   load_sequence(params:get("save_slot"))
@@ -256,7 +235,56 @@ function init_steps(t)
   end
 end
 
--- FUNK: Apply a groove template to a track
+-- GROOVE CAPTURE: Extract timing offsets from MIDI input
+local function extract_groove_template()
+  if #capture_times < 4 then return nil end
+  
+  local template = {}
+  local base_time = capture_times[1]
+  local bar_duration = 60 / 120 * 4  -- Approximate bar duration
+  
+  for i, t in ipairs(capture_times) do
+    if i > 16 then break end
+    local offset = t - base_time
+    local step_idx = math.floor(offset / bar_duration * 16) + 1
+    if step_idx >= 1 and step_idx <= 16 then
+      template[step_idx] = {
+        pitch = 0,
+        vel = 100,
+        num = 1,
+        den = 4,
+        artic = 0.5,
+        prob = 100
+      }
+    end
+  end
+  
+  return template
+end
+
+function capture_groove()
+  if capture_active then
+    -- Stop capture
+    capture_active = false
+    local groove = extract_groove_template()
+    if groove then
+      print("Groove captured from MIDI")
+      for i = 1, 16 do
+        if groove[i] then
+          tracks[selected_track].steps[i].vel = groove[i].vel
+          tracks[selected_track].steps[i].artic = groove[i].artic
+        end
+      end
+    end
+  else
+    -- Start capture
+    capture_active = true
+    capture_times = {}
+    print("Recording groove capture...")
+  end
+  redraw()
+end
+
 function apply_groove_template(track_idx, template_idx)
   local tmpl = groove_templates[template_idx]
   if not tmpl then return end
@@ -280,14 +308,12 @@ function apply_groove_template(track_idx, template_idx)
     step.repeats = 0
     step.count = 0
   end
-  -- Set pattern end to template length
   t.p_end = #tmpl.steps
   params:set("end_"..track_idx, #tmpl.steps)
   print("NARFNK: Loaded " .. tmpl.name .. " on " .. track_names[track_idx])
   redraw()
 end
 
--- 3. REMOTE MIDI HANDLER
 function handle_remote_cc(cc, val, mode)
   if mode == 2 then
     if cc >= 32 and cc <= 35 then tracks[cc-31].steps[edit_focus].pitch = val
@@ -298,12 +324,8 @@ function handle_remote_cc(cc, val, mode)
   redraw()
 end
 
--- FUNK: Calculate swing delay for a given step
--- Even-numbered steps (2, 4, 6...) get pushed later
--- swing_pct: 50 = straight, 67 = triplet feel
 local function get_swing_delay(step_in_bar, total_sleep)
   local swing_pct = params:get("swing") / 100
-  -- Only apply swing to even 16th notes (steps 2, 4, 6, 8...)
   if step_in_bar % 2 == 0 then
     local delay = total_sleep * (swing_pct - 0.5) * 2
     return delay
@@ -320,54 +342,69 @@ function run_track(t_idx)
     local global_transpose = params:get("global_trans")
     local final_pitch = get_quantized_note(s.pitch + t.transpose + global_transpose)
 
-    -- FUNK: Probability check — skip step if probability fails
-    if math.random(1, 100) > s.prob then
-      -- Rest: still sleep for the duration to keep time
+    -- Check mute/solo status
+    local any_solo = false
+    for i = 1, 4 do if track_solos[i] then any_solo = true end end
+    
+    local should_play = true
+    if any_solo then
+      should_play = track_solos[t_idx] and not track_mutes[t_idx]
+    else
+      should_play = not track_mutes[t_idx]
+    end
+
+    if not should_play then
+      -- Rest: still sleep for the duration
       local dur_beats = (s.num / s.den) * 4
       local total_sleep = dur_beats * clock.get_beat_sec()
-      -- Apply swing even on rests to keep pocket
       local step_in_bar = ((t.active_step - 1) % 16) + 1
       local swing_delay = get_swing_delay(step_in_bar, total_sleep)
       if swing_delay > 0 then clock.sleep(swing_delay) end
       clock.sleep(total_sleep - swing_delay)
     else
-      -- FUNK: Ghost note detection — if vel below ghost threshold, play softer
-      local ghost_thresh = params:get("ghost_thresh_"..t_idx)
-      local play_vel = s.vel
-      if s.vel > 0 and s.vel < ghost_thresh then
-        play_vel = math.floor(s.vel * 0.5) -- ghosts are half velocity
-      end
-
-      if s.glide > 0 then m:cc(65, 127, t.midi_ch); m:cc(5, s.glide, t.midi_ch) end
-      if t.cc1_n > 0 then m:cc(t.cc1_n, s.cc1_v, t.midi_ch) end
-      if t.cc2_n > 0 then m:cc(t.cc2_n, s.cc2_v, t.midi_ch) end
-
-      t.is_playing_note = true
-      m:note_on(final_pitch, play_vel, t.midi_ch)
-      m:cc(1, s.mod, t.midi_ch)
-
-      local dur_beats = (s.num / s.den) * 4
-      local total_sleep = dur_beats * clock.get_beat_sec()
-
-      -- FUNK: Apply swing
-      local step_in_bar = ((t.active_step - 1) % 16) + 1
-      local swing_delay = get_swing_delay(step_in_bar, total_sleep)
-      if swing_delay > 0 then clock.sleep(swing_delay) end
-
-      local remaining = total_sleep - swing_delay
-      if s.artic < 1.0 then
-        clock.sleep(remaining * s.artic)
-        m:note_off(final_pitch, 0, t.midi_ch)
-        t.is_playing_note = false
-        clock.sleep(remaining * (1 - s.artic))
+      if math.random(100) > s.prob then
+        local dur_beats = (s.num / s.den) * 4
+        local total_sleep = dur_beats * clock.get_beat_sec()
+        local step_in_bar = ((t.active_step - 1) % 16) + 1
+        local swing_delay = get_swing_delay(step_in_bar, total_sleep)
+        if swing_delay > 0 then clock.sleep(swing_delay) end
+        clock.sleep(total_sleep - swing_delay)
       else
-        clock.sleep(remaining)
-        m:note_off(final_pitch, 0, t.midi_ch)
-        t.is_playing_note = false
+        local ghost_thresh = params:get("ghost_thresh_"..t_idx)
+        local play_vel = s.vel
+        if s.vel > 0 and s.vel < ghost_thresh then
+          play_vel = math.floor(s.vel * 0.5)
+        end
+
+        if s.glide > 0 then m:cc(65, 127, t.midi_ch); m:cc(5, s.glide, t.midi_ch) end
+        if t.cc1_n > 0 then m:cc(t.cc1_n, s.cc1_v, t.midi_ch) end
+        if t.cc2_n > 0 then m:cc(t.cc2_n, s.cc2_v, t.midi_ch) end
+
+        t.is_playing_note = true
+        m:note_on(final_pitch, play_vel, t.midi_ch)
+        m:cc(1, s.mod, t.midi_ch)
+
+        local dur_beats = (s.num / s.den) * 4
+        local total_sleep = dur_beats * clock.get_beat_sec()
+
+        local step_in_bar = ((t.active_step - 1) % 16) + 1
+        local swing_delay = get_swing_delay(step_in_bar, total_sleep)
+        if swing_delay > 0 then clock.sleep(swing_delay) end
+
+        local remaining = total_sleep - swing_delay
+        if s.artic < 1.0 then
+          clock.sleep(remaining * s.artic)
+          m:note_off(final_pitch, 0, t.midi_ch)
+          t.is_playing_note = false
+          clock.sleep(remaining * (1 - s.artic))
+        else
+          clock.sleep(remaining)
+          m:note_off(final_pitch, 0, t.midi_ch)
+          t.is_playing_note = false
+        end
       end
     end
 
-    -- Advance step
     local next_step = t.active_step + 1
     if s.loop_to > 0 and s.repeats > 0 and s.loop_to < t.p_end and s.loop_to >= t.p_start then
       if math.random(1, 100) <= s.prob then
@@ -381,6 +418,42 @@ function run_track(t_idx)
     t.active_step = next_step
     redraw()
   end
+end
+
+-- GRID HANDLER
+g.key = function(x, y, z)
+  if z == 0 then return end
+  
+  if y == 8 then
+    -- Mute toggles (cols 1-4)
+    if x >= 1 and x <= 4 then
+      track_mutes[x] = not track_mutes[x]
+      redraw()
+    end
+  elseif y == 7 then
+    -- Solo toggles (cols 1-4)
+    if x >= 1 and x <= 4 then
+      track_solos[x] = not track_solos[x]
+      redraw()
+    end
+  end
+end
+
+local function grid_redraw()
+  if not g.device then return end
+  g:all(0)
+  
+  -- Row 8: Mute toggles
+  for i = 1, 4 do
+    g:led(i, 8, track_mutes[i] and 5 or 2)
+  end
+  
+  -- Row 7: Solo toggles
+  for i = 1, 4 do
+    g:led(i, 7, track_solos[i] and 15 or 2)
+  end
+  
+  g:refresh()
 end
 
 -- 5. HARDWARE INTERACTION
@@ -429,7 +502,8 @@ function key(n, z)
       if tracks[selected_track].is_running then clock.run(function() run_track(selected_track) end) end
     end
   elseif n == 3 then
-    if shift then if z == 1 then global_toggle() end
+    if shift then
+      if z == 1 then capture_groove() end
     else
       if z == 1 then hold_start = util.time()
       else if util.time() - hold_start > 1 then save_sequence(params:get("save_slot")) else funk_randomize_step(selected_track, edit_focus) end end
@@ -470,52 +544,43 @@ function get_quantized_note(note)
   return mu.snap_to_notes(sn, note)
 end
 
--- FUNK: Funk-aware randomize with syncopation + ghost notes
 function funk_randomize_step(t, i)
   local fd = funk_defaults[t]
   local step = tracks[t].steps[i]
   local step_in_bar = ((i - 1) % 16) + 1
 
-  -- Pitch: use track's funk range, quantized
   step.pitch = get_quantized_note(math.random(fd.pitch_lo, fd.pitch_hi))
 
-  -- Velocity: emphasize the ONE and syncopated accents
   if step_in_bar == 1 then
-    -- THE ONE: always strong
     step.vel = math.random(110, 127)
     step.prob = 100
   elseif step_in_bar == 5 or step_in_bar == 9 or step_in_bar == 13 then
-    -- Beat 2, 3, 4 downbeats: moderately strong
     step.vel = math.random(85, 110)
     step.prob = math.random(85, 100)
   elseif step_in_bar % 2 == 0 then
-    -- Even 16ths (swing targets): mix of accents and ghosts
     if math.random() > 0.5 then
-      step.vel = math.random(70, 100) -- accent
+      step.vel = math.random(70, 100)
       step.prob = math.random(70, 95)
     else
-      step.vel = math.random(25, 50) -- ghost note
+      step.vel = math.random(25, 50)
       step.prob = math.random(40, 70)
     end
   else
-    -- Odd off-beats: funkiest zone - syncopation lives here
     if math.random() > 0.3 then
       step.vel = math.random(60, 100)
       step.prob = math.random(60, 90)
     else
-      step.vel = 0 -- rest
+      step.vel = 0
       step.prob = 0
     end
   end
 
-  -- Articulation: tight for funk, varies by position
   if step_in_bar == 1 then
     step.artic = math.random(60, 80) / 100
   else
     step.artic = math.random(20, 55) / 100
   end
 
-  -- Duration: always 16th note grid
   step.num = 1
   step.den = 4
 end
@@ -547,10 +612,25 @@ function redraw()
     local name_w = #track_names[i] * 5 + 2
     screen.move((i-1)*32, 7); screen.text(track_names[i])
     if tracks[i].is_running then screen.rect((i-1)*32, 8, name_w, 1); screen.fill() end
+    if track_mutes[i] then
+      screen.level(4)
+      screen.move((i-1)*32, 16)
+      screen.text("MUTE")
+    end
+    if track_solos[i] then
+      screen.level(15)
+      screen.move((i-1)*32, 24)
+      screen.text("SOLO")
+    end
   end
   screen.font_size(8)
   screen.font_face(2)
   screen.level(3); screen.move(127, 7); screen.text_right("S:"..params:get("save_slot").." P:"..tracks[selected_track].active_step.." E:"..edit_focus)
+  if capture_active then
+    screen.level(15)
+    screen.move(127, 16)
+    screen.text_right("REC GROOVE")
+  end
   local t = tracks[selected_track]; local center_x, sc = 64, 12
   local is_last_step = (t.active_step == t.p_end); local cur_s = t.steps[t.active_step]
   local cur_w = math.max(2, (cur_s.num/cur_s.den)*4*sc); screen.level(is_last_step and 15 or 12)
@@ -563,7 +643,6 @@ function redraw()
     local idx = t.active_step + i; if idx <= 99 and fw_x < 128 then
       local s = t.steps[idx]; local w = math.max(2, (s.num/s.den)*4*sc)
       if idx == t.p_end then screen.level(10); screen.rect(fw_x, 15, w, 1); screen.fill(); screen.move(fw_x + w, 32); screen.line_rel(0, -16); screen.stroke() end
-      -- FUNK: Ghost notes drawn dimmer
       local ghost = params:get("ghost_thresh_"..selected_track)
       local step_bright = 2
       if s.vel > 0 and s.vel < ghost then step_bright = 1 end
@@ -588,7 +667,7 @@ function redraw()
   local vals = {
     s.pitch .. " (" .. mu.note_num_to_name(s.pitch, true) .. ")",
     s.vel,
-    s.num.."/\"..s.den,
+    s.num.."/\""..s.den,
     s.cc1_v,
     s.cc2_v,
     s.mod,
@@ -642,6 +721,7 @@ function redraw()
     end
   end
   screen.update()
+  grid_redraw()
 end
 
 function cleanup()
@@ -653,5 +733,9 @@ function cleanup()
     for ch = 1, 16 do
       m:cc(123, 0, ch)
     end
+  end
+  if g then
+    g:all(0)
+    g:refresh()
   end
 end
