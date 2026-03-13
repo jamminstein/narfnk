@@ -32,6 +32,12 @@ local show_splash = true
 local flash_level = 0
 local hold_start = 0
 
+-- Screen state: beat phase, popup timing
+local beat_phase = 0
+local popup_param = nil
+local popup_val = nil
+local popup_time = 0
+
 local param_names = {"PITCH", "VELOCITY", "DURATION", "CC1 VALUE", "CC2 VALUE", "MODULATION", "ARTICULATION", "GLIDE", "LOOP TO", "REPEATS", "PROBABILITY"}
 local m = midi.connect()
 local g = grid.connect()
@@ -127,6 +133,9 @@ local groove_capture = {}
 local capture_active = false
 local capture_times = {}
 
+-- Track fire flash state (brief flash on note fire)
+local track_fire_flash = { 0, 0, 0, 0 }
+
 -- 2. INITIALIZATION
 function init()
   for i = 1, 4 do
@@ -143,9 +152,22 @@ function init()
 
   clock.run(function() clock.sleep(2.5); show_splash = false; redraw() end)
 
+  -- Beat phase tracker for pulse and capture indicator
   clock.run(function()
     while true do
-      if flash_level > 0 then flash_level = flash_level - 1; redraw() end
+      beat_phase = (beat_phase + 1) % 8
+      clock.sleep(1/15)
+    end
+  end)
+
+  clock.run(function()
+    while true do
+      if flash_level > 0 then flash_level = flash_level - 1 end
+      for i = 1, 4 do
+        if track_fire_flash[i] > 0 then track_fire_flash[i] = track_fire_flash[i] - 1 end
+      end
+      if popup_time > 0 then popup_time = popup_time - 1 end
+      redraw()
       clock.sleep(1/15)
     end
   end)
@@ -383,6 +405,7 @@ function run_track(t_idx)
         t.is_playing_note = true
         m:note_on(final_pitch, play_vel, t.midi_ch)
         m:cc(1, s.mod, t.midi_ch)
+        track_fire_flash[t_idx] = 2
 
         local dur_beats = (s.num / s.den) * 4
         local total_sleep = dur_beats * clock.get_beat_sec()
@@ -475,19 +498,25 @@ function enc(n, d)
       if param_focus == 3 then dur_sub_focus = (d > 0) and 1 or 2 end
     end
   elseif n == 3 then
-    if param_focus == 1 then s.pitch = util.clamp(s.pitch + d, 0, 127)
-    elseif param_focus == 2 then s.vel = util.clamp(s.vel + d, 0, 127)
+    local old_val = nil
+    local param_name = param_names[param_focus]
+    if param_focus == 1 then s.pitch = util.clamp(s.pitch + d, 0, 127); old_val = s.pitch
+    elseif param_focus == 2 then s.vel = util.clamp(s.vel + d, 0, 127); old_val = s.vel
     elseif param_focus == 3 then
-      if dur_sub_focus == 1 then s.num = util.clamp(s.num + d, 1, 32) else s.den = util.clamp(s.den + d, 1, 32) end
-    elseif param_focus == 4 then s.cc1_v = util.clamp(s.cc1_v + d, 0, 127)
-    elseif param_focus == 5 then s.cc2_v = util.clamp(s.cc2_v + d, 0, 127)
-    elseif param_focus == 6 then s.mod = util.clamp(s.mod + d, 0, 127)
-    elseif param_focus == 7 then s.artic = util.clamp(s.artic + (d * 0.05), 0.05, 1)
-    elseif param_focus == 8 then s.glide = util.clamp(s.glide + d, 0, 127)
-    elseif param_focus == 9 then s.loop_to = util.clamp(s.loop_to + d, 0, 99)
-    elseif param_focus == 10 then s.repeats = util.clamp(s.repeats + d, 0, 16)
-    elseif param_focus == 11 then s.prob = util.clamp(s.prob + d, 0, 100)
+      if dur_sub_focus == 1 then s.num = util.clamp(s.num + d, 1, 32); old_val = s.num else s.den = util.clamp(s.den + d, 1, 32); old_val = s.den end
+    elseif param_focus == 4 then s.cc1_v = util.clamp(s.cc1_v + d, 0, 127); old_val = s.cc1_v
+    elseif param_focus == 5 then s.cc2_v = util.clamp(s.cc2_v + d, 0, 127); old_val = s.cc2_v
+    elseif param_focus == 6 then s.mod = util.clamp(s.mod + d, 0, 127); old_val = s.mod
+    elseif param_focus == 7 then s.artic = util.clamp(s.artic + (d * 0.05), 0.05, 1); old_val = math.floor(s.artic * 100)
+    elseif param_focus == 8 then s.glide = util.clamp(s.glide + d, 0, 127); old_val = s.glide
+    elseif param_focus == 9 then s.loop_to = util.clamp(s.loop_to + d, 0, 99); old_val = s.loop_to
+    elseif param_focus == 10 then s.repeats = util.clamp(s.repeats + d, 0, 16); old_val = s.repeats
+    elseif param_focus == 11 then s.prob = util.clamp(s.prob + d, 0, 100); old_val = s.prob
     end
+    -- Show popup
+    popup_param = param_name
+    popup_val = old_val
+    popup_time = 12  -- 0.8s at 15 FPS
   end
   redraw()
 end
@@ -602,72 +631,227 @@ function draw_splash()
   screen.update()
 end
 
--- 7. REDRAW
+-- HELPER: Map velocity to brightness (vel 127 = 15, vel 64 = 8, vel 32 = 4, vel 0 = 0)
+local function velocity_to_brightness(vel)
+  if vel == 0 then return 0 end
+  return math.max(1, math.floor(vel / 127 * 15))
+end
+
+-- 7. REDRAW with enhanced screen design
 function redraw()
   if show_splash then draw_splash(); return end
   screen.clear()
-  if flash_level > 0 then screen.level(flash_level); screen.rect(0,0,128,64); screen.fill() end
+  
+  -- ZONE 1: STATUS STRIP (y 0-8)
+  -- Show "NARFNK" at level 4 top-left
+  screen.level(4)
+  screen.move(0, 7)
+  screen.text("NARFNK")
+  
+  -- Show groove template name at level 8 center
+  screen.level(8)
+  screen.move(64, 7)
+  local groove_idx = params:get("groove_"..selected_track)
+  local groove_name = (groove_idx > 1) and groove_templates[groove_idx - 1].name or "---"
+  screen.text_center(groove_name)
+  
+  -- Beat pulse dot at x=124
+  local pulse_level = 2
+  if beat_phase < 4 then pulse_level = 6 + beat_phase end
+  screen.level(pulse_level)
+  screen.move(124, 4)
+  screen.text("●")
+  
+  -- ZONE 2: LIVE ZONE with track views (y 9-32)
   for i=1,4 do
     screen.level(selected_track == i and 15 or 2)
     local name_w = #track_names[i] * 5 + 2
-    screen.move((i-1)*32, 7); screen.text(track_names[i])
-    if tracks[i].is_running then screen.rect((i-1)*32, 8, name_w, 1); screen.fill() end
+    screen.move((i-1)*32, 11)
+    
+    -- Dim muted tracks, keep soloed bright
+    local track_level = 15
+    if track_mutes[i] then track_level = 3
+    elseif track_solos[i] then track_level = 15
+    else track_level = 8 end
+    
+    screen.level(track_level)
+    screen.text(track_names[i])
+    
+    -- Flash on note fire
+    if track_fire_flash[i] > 0 then
+      screen.level(15)
+    end
+    
+    if tracks[i].is_running then 
+      screen.level(track_level)
+      screen.rect((i-1)*32, 12, name_w, 1)
+      screen.fill()
+    end
+    
     if track_mutes[i] then
       screen.level(4)
-      screen.move((i-1)*32, 16)
-      screen.text("MUTE")
+      screen.move((i-1)*32, 18)
+      screen.text("M")
     end
+    
     if track_solos[i] then
       screen.level(15)
-      screen.move((i-1)*32, 24)
-      screen.text("SOLO")
+      screen.move((i-1)*32, 18)
+      screen.text("S")
     end
   end
+  
+  -- GROOVE CAPTURE indicator (pulsing REC)
+  if capture_active then
+    local rec_bright = 8 + math.floor(beat_phase / 2)
+    screen.level(rec_bright)
+    screen.move(127, 11)
+    screen.text_right("REC")
+  end
+  
+  -- ZONE 3: PLAYHEAD + STEP VISUALIZATION (y 24-40)
   screen.font_size(8)
   screen.font_face(2)
-  screen.level(3); screen.move(127, 7); screen.text_right("S:"..params:get("save_slot").." P:"..tracks[selected_track].active_step.." E:"..edit_focus)
-  if capture_active then
+  screen.level(3)
+  screen.move(127, 11)
+  screen.text_right("S:"..params:get("save_slot").." P:"..tracks[selected_track].active_step.." E:"..edit_focus)
+  
+  local t = tracks[selected_track]
+  local center_x, sc = 64, 12
+  local is_last_step = (t.active_step == t.p_end)
+  local cur_s = t.steps[t.active_step]
+  local cur_w = math.max(2, (cur_s.num/cur_s.den)*4*sc)
+  
+  -- Playhead with thin line behind (level 3)
+  screen.level(3)
+  screen.rect(center_x - 1, 24, 2, 16)
+  screen.fill()
+  
+  -- Current step bar with velocity-mapped brightness
+  local vel_bright = velocity_to_brightness(cur_s.vel)
+  screen.level(vel_bright)
+  local bar_h = (cur_s.pitch/127)*16
+  screen.rect(center_x-(cur_w/2), 40-bar_h, cur_w, bar_h)
+  screen.fill()
+  
+  if is_last_step then
     screen.level(15)
-    screen.move(127, 16)
-    screen.text_right("REC GROOVE")
+    screen.move(center_x, 20)
+    screen.line_rel(-2,-2)
+    screen.line_rel(4,0)
+    screen.line_rel(-2,2)
+    screen.fill()
   end
-  local t = tracks[selected_track]; local center_x, sc = 64, 12
-  local is_last_step = (t.active_step == t.p_end); local cur_s = t.steps[t.active_step]
-  local cur_w = math.max(2, (cur_s.num/cur_s.den)*4*sc); screen.level(is_last_step and 15 or 12)
-  local bar_h = (cur_s.pitch/127)*16; screen.rect(center_x-(cur_w/2), 32-bar_h, cur_w, bar_h); screen.fill()
-  if is_last_step then screen.level(15); screen.move(center_x, 12); screen.line_rel(-2,-2); screen.line_rel(4,0); screen.line_rel(-2,2); screen.fill() end
+  
+  -- Forward steps with velocity brightness
   local fw_x = center_x + (cur_w/2) + 2
   screen.font_face(1)
   screen.font_size(8)
   for i = 1, 10 do
-    local idx = t.active_step + i; if idx <= 99 and fw_x < 128 then
-      local s = t.steps[idx]; local w = math.max(2, (s.num/s.den)*4*sc)
-      if idx == t.p_end then screen.level(10); screen.rect(fw_x, 15, w, 1); screen.fill(); screen.move(fw_x + w, 32); screen.line_rel(0, -16); screen.stroke() end
+    local idx = t.active_step + i
+    if idx <= 99 and fw_x < 128 then
+      local s = t.steps[idx]
+      local w = math.max(2, (s.num/s.den)*4*sc)
+      if idx == t.p_end then
+        screen.level(10)
+        screen.rect(fw_x, 23, w, 1)
+        screen.fill()
+        screen.move(fw_x + w, 40)
+        screen.line_rel(0, -16)
+        screen.stroke()
+      end
+      
       local ghost = params:get("ghost_thresh_"..selected_track)
-      local step_bright = 2
-      if s.vel > 0 and s.vel < ghost then step_bright = 1 end
-      screen.level((idx >= t.p_start and idx <= t.p_end) and step_bright or 1); if idx == edit_focus then screen.level(5) end
-      local h = (s.pitch/127)*16; screen.rect(fw_x, 32-h, w, h); screen.fill(); fw_x = fw_x + w + 1
+      local step_bright = velocity_to_brightness(s.vel)
+      
+      -- Apply mute/solo dimming
+      if track_mutes[selected_track] then
+        step_bright = 3
+      elseif track_solos[selected_track] then
+        step_bright = step_bright
+      else
+        if step_bright == 0 then step_bright = 1 end
+      end
+      
+      screen.level((idx >= t.p_start and idx <= t.p_end) and step_bright or 1)
+      if idx == edit_focus then screen.level(15) end
+      
+      local h = (s.pitch/127)*16
+      screen.rect(fw_x, 40-h, w, h)
+      screen.fill()
+      fw_x = fw_x + w + 1
     end
   end
+  
+  -- Backward steps with velocity brightness
   local bw_x = center_x - (cur_w/2) - 2
   for i = 1, 10 do
-    local idx = t.active_step - i; if idx >= 1 and bw_x > 0 then
-      local s = t.steps[idx]; local w = math.max(2, (s.num/s.den)*4*sc)
-      if idx == t.p_end then screen.level(10); screen.rect(bw_x-w, 15, w, 1); screen.fill(); screen.move(bw_x, 32); screen.line_rel(0, -16); screen.stroke() end
+    local idx = t.active_step - i
+    if idx >= 1 and bw_x > 0 then
+      local s = t.steps[idx]
+      local w = math.max(2, (s.num/s.den)*4*sc)
+      if idx == t.p_end then
+        screen.level(10)
+        screen.rect(bw_x-w, 23, w, 1)
+        screen.fill()
+        screen.move(bw_x, 40)
+        screen.line_rel(0, -16)
+        screen.stroke()
+      end
+      
       local ghost = params:get("ghost_thresh_"..selected_track)
-      local step_bright = 2
-      if s.vel > 0 and s.vel < ghost then step_bright = 1 end
-      screen.level((idx >= t.p_start and idx <= t.p_end) and step_bright or 1); if idx == edit_focus then screen.level(5) end
-      local h = (s.pitch/127)*16; screen.rect(bw_x-w, 32-h, w, h); screen.fill(); bw_x = bw_x - w - 1
+      local step_bright = velocity_to_brightness(s.vel)
+      
+      -- Apply mute/solo dimming
+      if track_mutes[selected_track] then
+        step_bright = 3
+      elseif track_solos[selected_track] then
+        step_bright = step_bright
+      else
+        if step_bright == 0 then step_bright = 1 end
+      end
+      
+      screen.level((idx >= t.p_start and idx <= t.p_end) and step_bright or 1)
+      if idx == edit_focus then screen.level(15) end
+      
+      local h = (s.pitch/127)*16
+      screen.rect(bw_x-w, 40-h, w, h)
+      screen.fill()
+      bw_x = bw_x - w - 1
     end
   end
-  screen.level(1); screen.move(0, 36); screen.line(127, 36); screen.stroke()
+  
+  -- Divider line
+  screen.level(1)
+  screen.move(0, 42)
+  screen.line(127, 42)
+  screen.stroke()
+  
+  -- ZONE 4: CONTEXT BAR (y 43-48)
+  screen.level(8)
+  screen.move(8, 47)
+  screen.text(groove_name)
+  
+  screen.level(6)
+  screen.move(64, 47)
+  screen.text_center(params:get("swing").."%")
+  
+  screen.level(6)
+  screen.move(120, 47)
+  local bpm = math.floor(60 / clock.get_beat_sec())
+  screen.text_right(bpm.." BPM")
+  
+  screen.level(5)
+  screen.move(8, 55)
+  local ghost = params:get("ghost_thresh_"..selected_track)
+  screen.text("Ghost:"..ghost.."%")
+  
+  -- ZONE 5: PARAMETER DISPLAY (y 44-62)
   local s = t.steps[edit_focus]
   local vals = {
     s.pitch .. " (" .. mu.note_num_to_name(s.pitch, true) .. ")",
     s.vel,
-    s.num.."/\""..s.den,
+    s.num.."/"..s.den,
     s.cc1_v,
     s.cc2_v,
     s.mod,
@@ -683,7 +867,7 @@ function redraw()
   for i = 0, 3 do
     local idx = start + i
     if idx <= #param_names then
-      local y = 44 + (i * 6)
+      local y = 50 + (i * 6)
       screen.level(param_focus == idx and 15 or 2)
 
       screen.move(8, y)
@@ -720,6 +904,14 @@ function redraw()
       end
     end
   end
+  
+  -- TRANSIENT PARAMETER POPUP (level 15 for 0.8s)
+  if popup_time > 0 and popup_param and popup_val then
+    screen.level(15)
+    screen.move(64, 20)
+    screen.text_center(popup_param .. ": " .. popup_val)
+  end
+  
   screen.update()
   grid_redraw()
 end
