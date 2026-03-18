@@ -1,20 +1,28 @@
--- NARFNK: Quad Sequential
---         Funk Machine
+-- NARFNK: Quad Sequential Funk Machine
+-- 4 Channels of 99-Step Stochastic MIDI Funk Sequencing
 --
---      4 Channels of
---    99-Step Stochastic
---     MIDI Funk Sequencing
+-- PURPOSE:
+-- Advanced 4-track MIDI sequencer with stochastic step probability,
+-- tempo-sync'd groove templates, and live performance controls for
+-- generating funky polyrhythmic patterns. Uses PolyPerc or external
+-- MIDI output to drive any synthesizer or drum machine.
 --
--- K1 (Hold) + E1:
---      Select Track
---      (BASS, KEYS, GUIT, HORN)
--- E1: Select Step
--- E2: Select Parameter
--- E3: Adjust Parameter
+-- CONTROLS:
+-- K1 (Hold) + E1: Select Track (BASS, KEYS, GUIT, HORN)
+-- K1 press: Shift mode (hold for track select or pattern jump)
+-- K2 single: Start/stop playback of selected track
+-- K2 long: Jump to edit focus step
+-- K3 short: Randomize current step
+-- K3 long: Save current sequence to slot
+-- K1+K3: Start/stop groove capture (live MIDI timing)
+-- E1: Select step (1-99)
+-- E2: Select parameter (PITCH, VEL, DURATION, etc.)
+-- E3: Adjust parameter value
+-- Grid row 7: Solo toggles (cols 1-4)
+-- Grid row 8: Mute toggles (cols 1-4)
 --
--- K1 + K3: Live groove capture (1 bar MIDI timing)
--- Grid row 8: mute toggles (cols 1-4)
--- Grid row 7: solo toggles (cols 1-4)
+-- ENGINE: PolyPerc (built-in), MIDI out (external synths)
+-- MIDI: Input record, output 4 channels with CC/modulation support
 
 local tab = require 'tabutil'
 local mu = require 'musicutil'
@@ -211,6 +219,9 @@ function init()
   params:set_action("clear_track", function()
     init_steps(selected_track)
     print("Cleared Track " .. track_names[selected_track])
+    if m and tracks[selected_track].is_playing_note then
+      m:cc(123, 0, tracks[selected_track].midi_ch)
+    end
     redraw()
   end)
 
@@ -240,6 +251,7 @@ function init()
   end
 
   load_sequence(params:get("save_slot"))
+  params:bang()
   redraw()
 end
 
@@ -917,15 +929,27 @@ function redraw()
 end
 
 function cleanup()
+  -- Stop all clocks and metros
   clock.cancel_all()
+
+  -- Stop all running tracks and silence notes
   for i = 1, 4 do
     tracks[i].is_running = false
+    if m then
+      -- Send all-notes-off on each track's MIDI channel
+      m:cc(123, 0, tracks[i].midi_ch)
+    end
   end
+
+  -- Send all-notes-off across all MIDI channels
   if m then
     for ch = 1, 16 do
       m:cc(123, 0, ch)
+      m:cc(120, 0, ch)  -- also send reset
     end
   end
+
+  -- Clear grid LEDs
   if g then
     g:all(0)
     g:refresh()
