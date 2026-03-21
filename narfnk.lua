@@ -4,8 +4,8 @@
 -- PURPOSE:
 -- Advanced 4-track MIDI sequencer with stochastic step probability,
 -- tempo-sync'd groove templates, and live performance controls for
--- generating funky polyrhythmic patterns. Uses PolyPerc or external
--- MIDI output to drive any synthesizer or drum machine.
+-- generating funky polyrhythmic patterns. Uses MollyThePoly internal
+-- engine or external MIDI output to drive any synthesizer or drum machine.
 --
 -- CONTROLS:
 -- K1 (Hold) + E1: Select Track (BASS, KEYS, GUIT, HORN)
@@ -21,7 +21,7 @@
 -- Grid row 7: Solo toggles (cols 1-4)
 -- Grid row 8: Mute toggles (cols 1-4)
 --
--- ENGINE: PolyPerc (built-in), MIDI out (external synths)
+-- ENGINE: MollyThePoly (built-in polyphonic synth) + MIDI out (external)
 -- MIDI: Input record, output 4 channels with CC/modulation support
 
 local tab = require 'tabutil'
@@ -49,6 +49,10 @@ local popup_time = 0
 local param_names = {"PITCH", "VELOCITY", "DURATION", "CC1 VALUE", "CC2 VALUE", "MODULATION", "ARTICULATION", "GLIDE", "LOOP TO", "REPEATS", "PROBABILITY"}
 local m = midi.connect()
 local g = grid.connect()
+
+local function midi_to_hz(note)
+  return 440 * 2^((note - 69) / 12)
+end
 
 -- FUNK DEFAULTS per track role
 local funk_defaults = {
@@ -146,6 +150,8 @@ local track_fire_flash = { 0, 0, 0, 0 }
 
 -- 2. INITIALIZATION
 function init()
+  engine.name = "MollyThePoly"
+  
   for i = 1, 4 do
     tracks[i] = {
       active_step = 1,
@@ -153,7 +159,8 @@ function init()
       is_playing_note = false,
       steps = {},
       midi_ch = i, transpose = 0, p_start = 1, p_end = 16,
-      cc1_n = 0, cc2_n = 0
+      cc1_n = 0, cc2_n = 0,
+      engine_note_id = nil,
     }
     init_steps(i)
   end
@@ -222,6 +229,7 @@ function init()
     if m and tracks[selected_track].is_playing_note then
       m:cc(123, 0, tracks[selected_track].midi_ch)
     end
+    engine.noteOffAll()
     redraw()
   end)
 
@@ -419,6 +427,12 @@ function run_track(t_idx)
 
         t.is_playing_note = true
         m:note_on(final_pitch, play_vel, t.midi_ch)
+        
+        -- Engine output: use note pitch as ID for tracking
+        local freq = midi_to_hz(final_pitch)
+        engine.noteOn(final_pitch, freq, play_vel / 127)
+        t.engine_note_id = final_pitch
+        
         m:cc(1, s.mod, t.midi_ch)
         track_fire_flash[t_idx] = 2
 
@@ -433,11 +447,13 @@ function run_track(t_idx)
         if s.artic < 1.0 then
           clock.sleep(remaining * s.artic)
           m:note_off(final_pitch, 0, t.midi_ch)
+          engine.noteOff(final_pitch)
           t.is_playing_note = false
           clock.sleep(remaining * (1 - s.artic))
         else
           clock.sleep(remaining)
           m:note_off(final_pitch, 0, t.midi_ch)
+          engine.noteOff(final_pitch)
           t.is_playing_note = false
         end
       end
@@ -950,6 +966,9 @@ function cleanup()
       m:cc(123, 0, tracks[i].midi_ch)
     end
   end
+
+  -- Engine noteOffAll
+  engine.noteOffAll()
 
   -- Send all-notes-off across all MIDI channels
   if m then
