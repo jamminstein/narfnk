@@ -270,12 +270,13 @@ function init_steps(t)
 end
 
 -- GROOVE CAPTURE: Extract timing offsets from MIDI input
-local function extract_groove_template()
+local function extract_groove_template(bpm)
   if #capture_times < 4 then return nil end
   
+  bpm = bpm or 120  -- Default to 120 if not provided
   local template = {}
   local base_time = capture_times[1]
-  local bar_duration = 60 / 120 * 4  -- Approximate bar duration
+  local bar_duration = 60 / bpm * 4  -- Bar duration based on actual BPM
   
   for i, t in ipairs(capture_times) do
     if i > 16 then break end
@@ -300,7 +301,8 @@ function capture_groove()
   if capture_active then
     -- Stop capture
     capture_active = false
-    local groove = extract_groove_template()
+    local bpm = math.floor(60 / clock.get_beat_sec())
+    local groove = extract_groove_template(bpm)
     if groove then
       print("Groove captured from MIDI")
       for i = 1, 16 do
@@ -373,6 +375,7 @@ function run_track(t_idx)
   if params:get("send_clock") == 2 then m:start() end
   while t.is_running do
     local s = t.steps[t.active_step]
+    if not s then break end  -- Nil guard
     local global_transpose = params:get("global_trans")
     local final_pitch = get_quantized_note(s.pitch + t.transpose + global_transpose)
 
@@ -494,7 +497,10 @@ end
 -- 5. HARDWARE INTERACTION
 function enc(n, d)
   if show_splash then show_splash = false; redraw(); return end
-  local t = tracks[selected_track]; local s = t.steps[edit_focus]
+  local t = tracks[selected_track]
+  local s = t.steps[edit_focus]
+  if not s then return end  -- Nil guard
+  
   if n == 1 then
     if shift then selected_track = util.clamp(selected_track + d, 1, 4)
     else edit_focus = util.clamp(edit_focus + d, 1, 99) end
@@ -732,6 +738,7 @@ function redraw()
   local center_x, sc = 64, 12
   local is_last_step = (t.active_step == t.p_end)
   local cur_s = t.steps[t.active_step]
+  if not cur_s then cur_s = { pitch = 0, vel = 0, num = 1, den = 4 } end  -- Nil guard
   local cur_w = math.max(2, (cur_s.num/cur_s.den)*4*sc)
   
   -- Playhead with thin line behind (level 3)
@@ -763,6 +770,7 @@ function redraw()
     local idx = t.active_step + i
     if idx <= 99 and fw_x < 128 then
       local s = t.steps[idx]
+      if not s then s = { pitch = 0, vel = 0, num = 1, den = 4 } end  -- Nil guard
       local w = math.max(2, (s.num/s.den)*4*sc)
       if idx == t.p_end then
         screen.level(10)
@@ -801,6 +809,7 @@ function redraw()
     local idx = t.active_step - i
     if idx >= 1 and bw_x > 0 then
       local s = t.steps[idx]
+      if not s then s = { pitch = 0, vel = 0, num = 1, den = 4 } end  -- Nil guard
       local w = math.max(2, (s.num/s.den)*4*sc)
       if idx == t.p_end then
         screen.level(10)
@@ -860,6 +869,7 @@ function redraw()
   
   -- ZONE 5: PARAMETER DISPLAY (y 44-62)
   local s = t.steps[edit_focus]
+  if not s then s = { pitch = 0, vel = 0, num = 1, den = 4, cc1_v = 0, cc2_v = 0, mod = 0, artic = 0.5, glide = 0, loop_to = 0, repeats = 0, prob = 100 } end  -- Nil guard
   local vals = {
     s.pitch .. " (" .. mu.note_num_to_name(s.pitch, true) .. ")",
     s.vel,
