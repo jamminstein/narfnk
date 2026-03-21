@@ -229,7 +229,7 @@ function init()
     if m and tracks[selected_track].is_playing_note then
       m:cc(123, 0, tracks[selected_track].midi_ch)
     end
-    engine.noteOffAll()
+    engine.noteKillAll()
     redraw()
   end)
 
@@ -586,12 +586,12 @@ end
 
 function save_sequence(slot)
   local d = {}; for i=1,4 do d[i] = tracks[i].steps end
-  tab.save(d, norns.state.data .. "narfnk_slot_"..slot..".data"); print("NARFNK Saved to Slot "..slot)
+  tab.save(d, norns.state.data .. "narfnk_slot_"..slot..\".data\"); print("NARFNK Saved to Slot \"..slot)
 end
 
 function load_sequence(slot)
-  local p = norns.state.data .. "narfnk_slot_"..slot..".data"
-  if util.file_exists(p) then local sd = tab.load(p); for i=1,4 do tracks[i].steps = sd[i] end print("Slot "..slot.." Loaded") end
+  local p = norns.state.data .. "narfnk_slot_"..slot..\".data\"
+  if util.file_exists(p) then local sd = tab.load(p); for i=1,4 do tracks[i].steps = sd[i] end print(\"Slot \"..slot..\" Loaded\") end
   redraw()
 end
 
@@ -889,7 +889,7 @@ function redraw()
   local vals = {
     s.pitch .. " (" .. mu.note_num_to_name(s.pitch, true) .. ")",
     s.vel,
-    s.num.."/"..s.den,
+    s.num.."\/"..s.den,
     s.cc1_v,
     s.cc2_v,
     s.mod,
@@ -967,8 +967,8 @@ function cleanup()
     end
   end
 
-  -- Engine noteOffAll
-  engine.noteOffAll()
+  -- Engine noteKillAll
+  engine.noteKillAll()
 
   -- Send all-notes-off across all MIDI channels
   if m then
